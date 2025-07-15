@@ -1,10 +1,14 @@
 package payment
 
-import "time"
+import (
+	"time"
+)
 
 type Payment struct {
     CorrelationID string `json:"correlationId"`
     Amount        float64 `json:"amount"`
+    Processor     string `json:"processor"`
+    StartedAt     time.Time `json:"startedAt"`
 }
 
 type totalPayments struct {

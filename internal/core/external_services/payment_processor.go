@@ -16,8 +16,15 @@ type PaymentProcessor interface {
 	VerifyHealth() (HealthCheckResponse, error)
 }
 
+type ProcessorName string
+
+const (
+	ProcessorDefault ProcessorName = "default"
+	ProcessorFallback ProcessorName = "fallback"
+)
+
 type BasePaymentProcessorService struct {
-	Name    string
+	Name    ProcessorName
 	BaseURL string
 	Client  *http.Client
 }
@@ -82,7 +89,7 @@ func NewDefaultPaymentProcessor() *DefaultPaymentProcessor {
 	cfg := config.GetInstance()
 	slog.Info("Creating Default Payment Processor: Config: ", slog.Any("config", cfg))
 	return &DefaultPaymentProcessor{&BasePaymentProcessorService{
-		Name:    "Default Payment Processor",
+		Name:    ProcessorDefault,
 		BaseURL: cfg.ExternalServices.DefaultPaymentProcessor.BaseURL,
 		Client: &http.Client{
 			Timeout: 60 * time.Second,
@@ -97,7 +104,7 @@ type FallbackPaymentProcessor struct {
 func NewFallbackPaymentProcessor() *FallbackPaymentProcessor {
 	cfg := config.GetInstance()
 	return &FallbackPaymentProcessor{&BasePaymentProcessorService{
-		Name:    "Fallback Payment Processor",
+		Name:    ProcessorFallback,
 		BaseURL: cfg.ExternalServices.FallbackPaymentProcessor.BaseURL,
 		Client: &http.Client{
 			Timeout: 60 * time.Second,
