@@ -26,7 +26,7 @@ COPY --from=builder /app/cmd .
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Exponha a porta que sua aplicação utiliza
-EXPOSE 3000
+EXPOSE 8080
 
 # Comando para executar o aplicativo
 CMD ["./main"]

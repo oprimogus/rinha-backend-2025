@@ -2,17 +2,18 @@ package logger
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
 	"time"
+
+	"github.com/go-chi/httplog/v3"
+	"github.com/google/uuid"
 )
 
 type ContextKey string
 
-const (
-	RequestKey ContextKey = "request_data"
-)
+const RequestKey ContextKey = "request_data"
 
 type RequestData struct {
 	TraceID  string `json:"trace_id"`
@@ -22,72 +23,89 @@ type RequestData struct {
 }
 
 func GetRequestContext(ctx context.Context) *RequestData {
-	return ctx.Value(string(RequestKey)).(*RequestData)
+	if v, ok := ctx.Value(RequestKey).(*RequestData); ok {
+		return v
+	}
+	return nil
 }
 
-type ContextualHandler struct {
-	out  io.Writer
-	opts slog.HandlerOptions
+// Custom handler que injeta RequestData do contexto
+type ContextHandler struct {
+	slog.Handler
 }
 
-func NewContextualHandler(out io.Writer, opts *slog.HandlerOptions) *ContextualHandler {
-	if opts == nil {
-		opts = &slog.HandlerOptions{}
+func (h *ContextHandler) Handle(ctx context.Context, r slog.Record) error {
+	if req := GetRequestContext(ctx); req != nil {
+		r.AddAttrs(slog.Group("request",
+			slog.String("trace_id", req.TraceID),
+			slog.String("method", req.Method),
+			slog.String("path", req.Path),
+			slog.String("client_ip", req.ClientIP),
+		))
 	}
-	return &ContextualHandler{
-		out:  out,
-		opts: *opts,
-	}
+	return h.Handler.Handle(ctx, r)
 }
 
-func (h *ContextualHandler) Handle(ctx context.Context, r slog.Record) error {
-	m := make(map[string]any)
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	size   int
+}
 
-	// Adiciona campos padrão
-	m["time"] = r.Time.Format(time.RFC3339)
-	m["level"] = r.Level.String()
-	m["message"] = r.Message
+func (w *loggingResponseWriter) WriteHeader(statusCode int) {
+	w.status = statusCode
+	w.ResponseWriter.WriteHeader(statusCode)
+}
 
-	if reqData, ok := ctx.Value(RequestKey).(*RequestData); ok {
-		m["request"] = reqData
+func (w *loggingResponseWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
 	}
+	n, err := w.ResponseWriter.Write(b)
+	w.size += n
+	return n, err
+}
 
-	attrs := make(map[string]any)
-	r.Attrs(func(a slog.Attr) bool {
-		attrs[a.Key] = a.Value.Any()
-		return true
+
+func InitLogger(out io.Writer) {
+	opts := &slog.HandlerOptions{
+		Level:       slog.LevelInfo,
+		ReplaceAttr: httplog.SchemaECS.Concise(true).ReplaceAttr,
+	}
+	base := slog.NewJSONHandler(out, opts)
+	slog.SetDefault(slog.New(&ContextHandler{Handler: base}))
+}
+
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		traceID := uuid.New().String()
+
+		reqData := &RequestData{
+			TraceID:  traceID,
+			Method:   r.Method,
+			Path:     r.URL.Path,
+			ClientIP: r.RemoteAddr,
+		}
+
+		ctx := context.WithValue(r.Context(), RequestKey, reqData)
+		lrw := &loggingResponseWriter{ResponseWriter: w}
+		nr := r.WithContext(ctx)
+
+		next.ServeHTTP(lrw, nr)
+
+		duration := time.Since(start)
+
+		slog.Info("request handled",
+			slog.Group("request",
+				slog.String("trace_id", reqData.TraceID),
+				slog.String("method", reqData.Method),
+				slog.String("path", reqData.Path),
+				slog.String("client_ip", reqData.ClientIP),
+				slog.Int("status", lrw.status),
+				slog.Int("size", lrw.size),
+				slog.String("duration", duration.String()),
+			),
+		)
 	})
-
-	if len(attrs) > 0 {
-		m["attributes"] = attrs
-	}
-
-	encoded, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-
-	_, err = h.out.Write(append(encoded, '\n'))
-	return err
-}
-
-func (h *ContextualHandler) Enabled(context.Context, slog.Level) bool {
-	return true
-}
-
-func (h *ContextualHandler) WithAttrs([]slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *ContextualHandler) WithGroup(string) slog.Handler {
-	return h
-}
-
-func InitLogger(out io.Writer, level slog.Level) {
-	handler := NewContextualHandler(out, &slog.HandlerOptions{
-		Level:     level,
-		AddSource: true,
-	})
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
 }

@@ -2,6 +2,7 @@ package externalservices
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -12,14 +13,15 @@ import (
 )
 
 type PaymentProcessor interface {
-	ProcessPayment(params PaymentParams) (PaymentResponse, error)
+	ProcessorName() ProcessorName
+	ProcessPayment(ctx context.Context, params PaymentParams) (PaymentResponse, error)
 	VerifyHealth() (HealthCheckResponse, error)
 }
 
 type ProcessorName string
 
 const (
-	ProcessorDefault ProcessorName = "default"
+	ProcessorDefault  ProcessorName = "default"
 	ProcessorFallback ProcessorName = "fallback"
 )
 
@@ -29,33 +31,38 @@ type BasePaymentProcessorService struct {
 	Client  *http.Client
 }
 
-func (b *BasePaymentProcessorService) ProcessPayment(params PaymentParams) (PaymentResponse, error) {
-    url := strings.Join([]string{b.BaseURL, "/payments"}, "")
-   
-    payload, err := json.Marshal(params)
+func (b *BasePaymentProcessorService) ProcessorName() ProcessorName {
+	return b.Name
+}
+
+func (b *BasePaymentProcessorService) ProcessPayment(ctx context.Context, params PaymentParams) (PaymentResponse, error) {
+	slog.InfoContext(ctx, "processing payment with "+string(b.Name), "correlationID", params.CorrelationID)
+	url := strings.Join([]string{b.BaseURL, "/payments"}, "")
+
+	payload, err := json.Marshal(params)
 	if err != nil {
 		return PaymentResponse{}, err
 	}
-    
+
 	req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
 	if err != nil {
 		return PaymentResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-   
+
 	resp, err := b.Client.Do(req)
 	if err != nil {
 		return PaymentResponse{}, err
 	}
 	defer resp.Body.Close()
-	
+
 	slog.Info("process payment response", "response", resp.StatusCode)
-   
+
 	var response PaymentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return PaymentResponse{}, err
 	}
-   
+	slog.InfoContext(ctx, "payment processed with "+string(b.Name), "correlationID", params.CorrelationID, "response", response)
 	return response, nil
 }
 
@@ -87,7 +94,6 @@ type DefaultPaymentProcessor struct {
 
 func NewDefaultPaymentProcessor() *DefaultPaymentProcessor {
 	cfg := config.GetInstance()
-	slog.Info("Creating Default Payment Processor: Config: ", slog.Any("config", cfg))
 	return &DefaultPaymentProcessor{&BasePaymentProcessorService{
 		Name:    ProcessorDefault,
 		BaseURL: cfg.ExternalServices.DefaultPaymentProcessor.BaseURL,
@@ -110,4 +116,15 @@ func NewFallbackPaymentProcessor() *FallbackPaymentProcessor {
 			Timeout: 60 * time.Second,
 		},
 	}}
+}
+
+func FindPaymentProcessorStrategy(name ProcessorName) PaymentProcessor {
+	switch name {
+	case ProcessorDefault:
+		return NewDefaultPaymentProcessor()
+	case ProcessorFallback:
+		return NewFallbackPaymentProcessor()
+	default:
+		return nil
+	}
 }

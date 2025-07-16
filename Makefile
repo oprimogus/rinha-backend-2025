@@ -36,9 +36,10 @@ run:
 .PHONY: up
 up:
 	docker compose -f deployments/payment-processor/docker-compose.yaml up -d
-	# docker compose -f deployments/docker-compose.yaml up -d
+	docker compose -f deployments/docker-compose.yaml up --build
 
 .PHONY: down
 down:
+	docker compose -f deployments/docker-compose.yaml down
 	docker compose -f deployments/payment-processor/docker-compose.yaml down
-	# docker compose -f deployments/docker-compose.yaml down
+	

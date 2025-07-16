@@ -13,6 +13,6 @@ type PaymentResponse struct {
 }
 
 type HealthCheckResponse struct {
+    MinResponseTime int `json:"minResponseTime"` // milliseconds
     Failing bool `json:"failing"`
-    MinResponseTime int `json:"minResponseTime"`
 }

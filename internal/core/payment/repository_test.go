@@ -153,3 +153,87 @@ func (s *RepositoryTestSuite) TestSaveProcessorHealthStatus() {
     assert.Equal(s.T(), health.Failing, h.Failing)
     assert.Equal(s.T(), health.MinResponseTime, h.MinResponseTime)
 }
+
+func (s *RepositoryTestSuite) TestGetPaymentsSummary_WithFilter() {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+
+	payments := []payment.Payment{
+		{
+			CorrelationID: uuid.New().String(),
+			Amount:        100.00,
+			Processor:     string(externalservices.ProcessorDefault),
+			StartedAt:     now.Add(-10 * time.Second),
+		},
+		{
+			CorrelationID: uuid.New().String(),
+			Amount:        200.00,
+			Processor:     string(externalservices.ProcessorFallback),
+			StartedAt:     now.Add(-5 * time.Second),
+		},
+		{
+			CorrelationID: uuid.New().String(),
+			Amount:        50.00,
+			Processor:     string(externalservices.ProcessorDefault),
+			StartedAt:     now.Add(-2 * time.Second),
+		},
+	}
+
+	for _, p := range payments {
+		err := s.r.SavePayment(ctx, p)
+		assert.NoError(s.T(), err)
+	}
+
+	filter := payment.PaymentSummaryParams{
+		Filter: true,
+		From:   now.Add(-15 * time.Second),
+		To:     now,
+	}
+
+	summary, err := s.r.GetPaymentsSummary(ctx, filter)
+	assert.NoError(s.T(), err)
+
+	assert.Equal(s.T(), 2, summary.Default.TotalRequests)
+	assert.InDelta(s.T(), 150.00, summary.Default.TotalAmount, 0.01)
+
+	assert.Equal(s.T(), 1, summary.Fallback.TotalRequests)
+	assert.InDelta(s.T(), 200.00, summary.Fallback.TotalAmount, 0.01)
+}
+
+func (s *RepositoryTestSuite) TestGetPaymentsSummary_WithoutFilter() {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+
+	payments := []payment.Payment{
+		{
+			CorrelationID: uuid.New().String(),
+			Amount:        300.00,
+			Processor:     string(externalservices.ProcessorFallback),
+			StartedAt:     now.Add(-30 * time.Second),
+		},
+		{
+			CorrelationID: uuid.New().String(),
+			Amount:        100.00,
+			Processor:     string(externalservices.ProcessorDefault),
+			StartedAt:     now.Add(-25 * time.Second),
+		},
+	}
+
+	for _, p := range payments {
+		err := s.r.SavePayment(ctx, p)
+		assert.NoError(s.T(), err)
+	}
+
+	filter := payment.PaymentSummaryParams{Filter: false}
+
+	summary, err := s.r.GetPaymentsSummary(ctx, filter)
+	assert.NoError(s.T(), err)
+
+	assert.GreaterOrEqual(s.T(), summary.Default.TotalRequests, 1)
+	assert.GreaterOrEqual(s.T(), summary.Fallback.TotalRequests, 1)
+
+	assert.GreaterOrEqual(s.T(), summary.Default.TotalAmount, 1.0)
+	assert.GreaterOrEqual(s.T(), summary.Fallback.TotalAmount, 1.0)
+}
+
+
